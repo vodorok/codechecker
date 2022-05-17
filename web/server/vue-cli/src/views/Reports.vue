@@ -257,9 +257,16 @@ export default {
           value: "detectionStatus",
           align: "center",
           sortable: true
+        },
+        {
+          text: "Timestamp",
+          value: "timestamp",
+          align: "center",
+          sortable: true
         }
       ],
       reports: [],
+      hasTimeStamp: false,
       selected: [],
       namespace: namespace,
       pagination: {
@@ -302,6 +309,9 @@ export default {
           return this.reportFilter.isUnique;
         }
 
+        if (header.value === "timestamp") {
+          return this.hasTimeStamp; }
+
         return true;
       });
     },
@@ -323,6 +333,10 @@ export default {
           ...(detectedAt ? [ `Detected at: ${detectedAt}` ] : []),
           ...(fixedAt ? [ `Fixed at: ${fixedAt}` ] : [])
         ].join("\n");
+
+        if (!this.hasTimeStamp && report.timestamp) {
+          this.hasTimeStamp = true;
+        }
 
         return {
           ...report,
