@@ -21,6 +21,7 @@ import subprocess
 import sys
 
 from typing import Optional
+from pprint import pprint
 
 try:
     # pylint: disable=no-name-in-module
@@ -90,7 +91,6 @@ def create_client(
 
     return cls.Client(protocol)
 
-
 def main(args):
     """ Send multiple Thrift API requests to the server. """
     # Get server info.
@@ -124,30 +124,63 @@ def main(args):
 
     product_endpoint_filter = None
     product_name_filter = None
-    try:
-        print("Get products...")
-        products = cli_product.getProducts(
-            product_endpoint_filter, product_name_filter)
-        print(f"Products: {products}\n")
-    except TApplicationException as ex:
-        print(f"Failed to get products with the following exception: {ex}")
 
-    # Get runs for the default product.
-    cli_report = create_client(
-        args, ReportAPI_v6, "CodeCheckerService", "Default", token)
+    products = [args.product]
+    if not args.product:
+        try:
+            print("Get products...")
+            products = [p.endpoint for p in cli_product.getProducts(
+                product_endpoint_filter, product_name_filter)]
+            print(f"Products: {products}\n")
+        except TApplicationException as ex:
+            print(f"Failed to get products with the following exception: {ex}")
 
-    run_filter = None
-    limit = 0
-    offset = 0
-    sort_mode = None
-    try:
-        print("Get runs...")
-        runs = cli_report.getRunData(run_filter, limit, offset, sort_mode)
-        print(f"Runs: {runs}")
-    except RequestFailed as ex:
-        print(f"Failed to get runs with the following exception: {ex.message}")
-        sys.exit(1)
 
+    for product in products:
+        # Get runs for the all products.
+        cli_report = create_client(
+            args, ReportAPI_v6, "CodeCheckerService", product, token)
+
+        run_filter = None
+        limit = 500
+        run_offset = 0
+        has_runs = True
+        sort_mode = None
+        runs = args.run_id
+        print(runs)
+        if not runs:
+            try:
+                print("Get runs...")
+                while has_runs:
+                    ret = cli_report.getRunData(run_filter, limit, run_offset, sort_mode)
+                    print(run_offset, ret)
+                    if ret:
+                        run_offset += limit
+                        runs.extend([r.runId for r in ret])
+                    else:
+                        has_runs = False
+
+                pprint(f"Run-ids: {runs}")
+            except RequestFailed as ex:
+                print(f"Failed to get runs with the following exception: {ex.message}")
+                sys.exit(1)
+
+        for run in runs:
+            has_reports = True
+            report_offset = 0
+            reports = []
+            while has_reports and args.max_offset > report_offset:
+                ret = cli_report.getRunResults([run], 0, report_offset, [], None, None, False)
+                print(f"Getting reports for run-id {run}: no. {report_offset}")
+                if ret:
+                    report_offset += limit
+                    reports.extend([(r.reportId, r.reviewData.status) for r in ret])
+                    #print(offset)
+                else:
+                    has_reports = False
+            with open(f'{product}_{run}.csv', 'w') as f:
+                for report in reports:
+                    f.write(f'{report[0]}, {report[1]}\n')
 
 def __add_arguments_to_parser(parser):
     """ Add arguments to the the given parser. """
@@ -174,6 +207,23 @@ def __add_arguments_to_parser(parser):
     parser.add_argument('--password',
                         dest="password",
                         help="Password.")
+
+    parser.add_argument('--product',
+                        dest="product",
+                        help="If set, only this product will be queried.")
+
+    parser.add_argument('--run-id',
+                        dest="run_id",
+                        nargs='+',
+                        default=[],
+                        type=int,
+                        help="If set, only this run-id will be queried.")
+
+    parser.add_argument('--max-report-offset',
+                        dest="max_offset",
+                        default=sys.maxsize,
+                        type=int,
+                        help="Maximum number of reports to be queried per run-id")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
