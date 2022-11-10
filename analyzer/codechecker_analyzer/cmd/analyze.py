@@ -15,10 +15,13 @@ import collections
 import json
 import multiprocessing
 import os
+from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 
+from pprint import pprint
 from typing import List
 
 from codechecker_report_converter.util import load_json_or_empty
@@ -853,6 +856,33 @@ def __get_result_source_files(metadata):
 
     return result_src_files
 
+def pylint_analyze(input_dir, output_dir):
+    # Run pylint analyzer with popen
+    # Pylint execution with json file as output
+    reports_file_name = Path("pylint_reports.json")
+    with open(reports_file_name, "w") as reports_file:
+        proc = subprocess.Popen(["pylint", "-f", "json", input_dir], stdout=reports_file, stderr=subprocess.PIPE)
+        proc.communicate()
+
+        # Process pylint output with the pylint report converter
+    from codechecker_report_converter.analyzers.pylint.analyzer_result import AnalyzerResult
+    reports = AnalyzerResult().get_reports(reports_file_name)
+
+    from codechecker_report_converter.report.hash import get_report_hash, HashType
+    hash_type = HashType.PATH_SENSITIVE
+
+    for report in reports:
+        report.report_hash = get_report_hash(report, hash_type)
+
+    from codechecker_report_converter.report import report_file
+
+    from codechecker_report_converter.report.parser.base import AnalyzerInfo
+    info = AnalyzerInfo("Pylint")
+    report_file.create(
+        os.path.join(output_dir, "pylint.plist"),
+        reports,
+        None,
+        info)
 
 def main(args):
     """
@@ -882,6 +912,21 @@ def main(args):
         LOG.error("The given output path is not a directory: " +
                   args.output_path)
         sys.exit(1)
+    if not os.path.exists(args.output_path):
+        os.makedirs(args.output_path)
+
+
+    if Path(args.logfile).suffix == ".json":
+        compile_commands = load_json_or_empty(args.logfile)
+        # Fall back to directory discovery
+        if compile_commands is None:
+            sys.exit(1)
+    else:
+        LOG.info("Switching to directory based analysis")
+        pylint_analyze(args.logfile, args.output_path)
+        LOG.info(f"Pylint analysis finished! Reports written to {args.output_path}/pylint.plist")
+        return
+        #sys.exit(1)
 
     if 'enable_all' in args:
         LOG.info("'--enable-all' was supplied for this analysis.")
@@ -916,9 +961,7 @@ def main(args):
             sys.exit(1)
         compiler_info_file = args.compiler_info_file
 
-    compile_commands = load_json_or_empty(args.logfile)
-    if compile_commands is None:
-        sys.exit(1)
+
 
     # Process the skip list if present.
     skip_handlers = __get_skip_handlers(args, compile_commands)
@@ -1063,7 +1106,10 @@ def main(args):
     LOG.debug_analyzer("Compile commands forwarded for analysis: %d",
                        compile_cmd_count.analyze)
 
-    analyzer.perform_analysis(args, skip_handlers, context, actions,
+    analyzer.perform_analysis(args,
+                              skip_handlers,
+                              context,
+                              actions,
                               metadata_tool,
                               compile_cmd_count)
 
