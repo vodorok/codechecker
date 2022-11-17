@@ -20,8 +20,11 @@ import time
 import zlib
 
 from copy import deepcopy
+import cProfile
+import pstats
+
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Set, Tuple
 
 import sqlalchemy
@@ -3319,7 +3322,14 @@ class ThriftRequestHandler:
         from codechecker_server.api.mass_store_run import MassStoreRun
         m = MassStoreRun(self, name, tag, version, b64zip, force,
                          trim_path_prefixes, description)
-        return m.store()
+        with cProfile.Profile() as pr:
+            res = m.store()
+
+        stats = pstats.Stats(pr)
+        stats.sort_stats(pstats.SortKey.TIME)
+        stats.dump_stats(f"/home/ekutgab/ws/tools/snakeviz/dump_{datetime.timestamp(datetime.now())}.prof")
+
+        return res
 
     @exc_to_thrift_reqfail
     @timeit

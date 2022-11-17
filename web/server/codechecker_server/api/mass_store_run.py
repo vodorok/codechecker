@@ -42,7 +42,7 @@ from ..database.run_db_model import AnalysisInfo, AnalyzerStatistic, \
 from ..metadata import checker_is_unavailable, MetadataInfoParser
 
 from .report_server import ThriftRequestHandler
-from .thrift_enum_helper import report_extended_data_type_str
+from .thrift_enum_helper import report_extended_data_type_str, review_status_enum
 
 
 LOG = get_logger('server')
@@ -223,7 +223,7 @@ class MassStoreRun:
         self.__duration: int = 0
         self.__wrong_src_code_comments: List[str] = []
         self.__already_added_report_hashes: Set[str] = set()
-        self.__new_report_hashes: Set[str] = set()
+        self.__new_report_hashes: Dict[str, Tuple] = Dict
         self.__all_report_checkers: Set[str] = set()
 
     @property
@@ -712,7 +712,7 @@ class MassStoreRun:
         run_id: int,
         report: Report,
         file_path_to_id: Dict[str, int],
-        review_status: ReviewStatus,
+        review_status: Dict[str, Any],
         review_status_is_in_source: bool,
         detection_status: str,
         detection_time: datetime,
@@ -732,8 +732,8 @@ class MassStoreRun:
                 run_id, report.report_hash, file_path_to_id[report.file.path],
                 report.message, checker_name or 'NOT FOUND',
                 report.category, report.type, report.line, report.column,
-                severity, review_status.status, review_status.author,
-                review_status.message, run_history_time,
+                severity, review_status["status"], review_status["author"],
+                review_status["message"], run_history_time,
                 review_status_is_in_source,
                 detection_status, detection_time,
                 len(report.bug_path_events), analyzer_name)
@@ -808,7 +808,7 @@ class MassStoreRun:
         if not reports:
             return True
 
-        def get_review_status(report: Report) -> Tuple[ReviewStatus, bool]:
+        def get_review_status_from_source(report: Report) -> Dict[str, Any]:
             """
             Return the review status belonging to the given report and a
             boolean value which indicates whether the review status comes from
@@ -823,17 +823,17 @@ class MassStoreRun:
             - If the report doesn't have a default review status then an
               "unreviewed" review status and False returns.
             """
-            unreviewed = ReviewStatus()
-            unreviewed.status = 'unreviewed'
-            unreviewed.message = b''
-            unreviewed.bug_hash = report.report_hash
-            unreviewed.author = self.user_name
-            unreviewed.date = run_history_time
-
             # The original file path is needed here, not the trimmed, because
             # the source files are extracted as the original file path.
             source_file_name = os.path.realpath(os.path.join(
                 source_root, report.file.original_path.strip("/")))
+
+            review_status = {}
+            review_status["status"] = 'unreviewed'
+            review_status["message"] = b''
+            review_status["bug_hash"] = report.report_hash
+            review_status["author"] = self.user_name
+            review_status["date"] = run_history_time
 
             if os.path.isfile(source_file_name):
                 src_comment_data = parse_codechecker_review_comment(
@@ -843,14 +843,10 @@ class MassStoreRun:
                     data = src_comment_data[0]
                     rs = data.status, bytes(data.message, 'utf-8')
 
-                    review_status = ReviewStatus()
-                    review_status.status = rs[0]
-                    review_status.message = rs[1]
-                    review_status.bug_hash = report.report_hash
-                    review_status.author = self.user_name
-                    review_status.date = run_history_time
+                    review_status["status"] = rs[0]
+                    review_status["message"] = rs[1]
 
-                    return review_status, True
+                    return review_status
                 elif len(src_comment_data) > 1:
                     LOG.warning(
                         "Multiple source code comment can be found "
@@ -862,16 +858,8 @@ class MassStoreRun:
                         f"{source_file_name}|{report.line}|"
                         f"{report.checker_name}")
 
-                    return unreviewed, False
+            return review_status
 
-            review_status = session.query(ReviewStatus) \
-                .filter(ReviewStatus.bug_hash == report.report_hash) \
-                .one_or_none()
-
-            if review_status is None:
-                review_status = unreviewed
-
-            return review_status, False
 
         def get_missing_file_ids(report: Report) -> List[str]:
             """ Returns file paths which database file id is missing. """
@@ -923,12 +911,15 @@ class MassStoreRun:
 
             analyzer_name = mip.checker_to_analyzer.get(
                 report.checker_name, report.analyzer_name)
-            review_status, scc = get_review_status(report)
+
+            # TODO do this in bulk
+            rs_from_source = get_review_status_from_source(report)
+            scc = True if rs_from_source else False
 
             # False positive and intentional reports are considered as closed
             # reports which is indicated with non-null "fixed_at" date.
             fixed_at = None
-            if review_status.status in ['false_positive', 'intentional']:
+            if rs_from_source["status"] in ['false_positive', 'intentional']:
                 if old_report and old_report.review_status in \
                         ['false_positive', 'intentional']:
                     fixed_at = old_report.review_status_date
@@ -937,10 +928,10 @@ class MassStoreRun:
 
             report_id = self.__add_report(
                 session, run_id, report, file_path_to_id,
-                review_status, scc, detection_status, detected_at,
+                rs_from_source, scc, detection_status, detected_at,
                 run_history_time, analysis_info, analyzer_name, fixed_at)
 
-            self.__new_report_hashes.add(report.report_hash)
+            self.__new_report_hashes[report.report_hash] = rs_from_source["status"]
             self.__already_added_report_hashes.add(report_path_hash)
 
             LOG.debug("Storing report done. ID=%d", report_id)
@@ -957,6 +948,7 @@ class MassStoreRun:
         run_history_time: datetime
     ):
         """ Parse up and store the plist report files. """
+
         def get_skip_handler(
             report_dir: str
         ) -> skiplist_handler.SkipListHandler:
@@ -979,22 +971,29 @@ class MassStoreRun:
 
         # Reset internal data.
         self.__already_added_report_hashes = set()
-        self.__new_report_hashes = set()
+        self.__new_report_hashes = dict()
         self.__all_report_checkers = set()
 
         all_reports = session.query(DBReport) \
             .filter(DBReport.run_id == run_id) \
             .all()
 
-        hash_map_reports = defaultdict(list)
+        report_to_report_id = defaultdict(list)
         for report in all_reports:
-            hash_map_reports[report.bug_id].append(report)
+            report_to_report_id[report.bug_id].append(report)
 
         enabled_checkers: Set[str] = set()
         disabled_checkers: Set[str] = set()
 
         # Processing analyzer result files.
         processed_result_file_count = 0
+
+        for root_dir_path, _, report_file_paths in os.walk(report_dir):
+            for f in report_file_paths:
+                if not report_file.is_supported(f):
+                    continue
+
+
         for root_dir_path, _, report_file_paths in os.walk(report_dir):
             LOG.debug("Get reports from '%s' directory", root_dir_path)
 
@@ -1014,8 +1013,45 @@ class MassStoreRun:
                 self.__process_report_file(
                     report_file_path, session, source_root, run_id,
                     file_path_to_id, run_history_time,
-                    skip_handler, hash_map_reports)
+                    skip_handler, report_to_report_id)
                 processed_result_file_count += 1
+
+        # Get all relevant review_statuses for the newly stored reports
+        #all_review_statues = session.query(ReviewStatus.bug_hash, ReviewStatus.status, DBReport.id) \
+        reports_to_rs_rules = session.query(ReviewStatus, DBReport.id) \
+            .join(DBReport, DBReport.bug_id == ReviewStatus.bug_hash) \
+            .filter(sqlalchemy.and_(DBReport.run_id == run_id, # Might be faster to query without condition
+                                    ReviewStatus.bug_hash.in_(self.__new_report_hashes)))
+        # TODO Call self.getReviewStatusRules instead of the above query
+
+
+        # Create the sqlalchemy mappings for the bulk update
+        review_status_change = []
+        for rs_info in reports_to_rs_rules:
+            print(rs_info[0].bug_hash,
+                  rs_info[0].status,
+                  rs_info[0].author,
+                  rs_info[0].message,
+                  rs_info[0].date)
+            review_status_change.append(
+                {
+                    "id" : rs_info[1],
+                    "review_status": rs_info[0].status,
+                    "review_status_author": rs_info[0].author,
+                    "review_status_date": rs_info[0].date,
+                    "review_status_is_in_source" : False,
+                    "review_status_message" : rs_info[0].message
+                }
+            ) 
+        print(review_status_change)
+        session.bulk_update_mappings(DBReport, review_status_change)
+
+
+        # Update all newly stored reports if there are any rev-stat rules for them
+        # Find if any newly stored report need a "custom" review status.
+
+        # TODO Ask Tibi about reports already in DB.
+
 
         LOG.info("[%s] Processed %d analyzer result file(s).", self.__name,
                  processed_result_file_count)
@@ -1030,7 +1066,7 @@ class MassStoreRun:
         disabled_checkers -= self.__all_report_checkers
 
         reports_to_delete = set()
-        for bug_hash, reports in hash_map_reports.items():
+        for bug_hash, reports in report_to_report_id.items():
             if bug_hash in self.__new_report_hashes:
                 reports_to_delete.update([x.id for x in reports])
             else:
