@@ -223,7 +223,8 @@ class MassStoreRun:
         self.__duration: int = 0
         self.__wrong_src_code_comments: List[str] = []
         self.__already_added_report_hashes: Set[str] = set()
-        self.__new_report_hashes: Dict[str, Tuple] = Dict
+        self.__severity_map: Dict[str, int] = {}
+        self.__new_report_hashes: Dict[str, Tuple] = {}
         self.__all_report_checkers: Set[str] = set()
 
     @property
@@ -724,9 +725,15 @@ class MassStoreRun:
         """ Add report to the database. """
         try:
             checker_name = report.checker_name
-            severity_name = \
-                self.__context.checker_labels.severity(checker_name)
-            severity = ttypes.Severity._NAMES_TO_VALUES[severity_name]
+            
+            # Cache the severity of the checkers
+            try:
+                severity = self.__severity_map[checker_name]
+            except KeyError:
+                severity_name = \
+                    self.__context.checker_labels.severity(checker_name)
+                severity = ttypes.Severity._NAMES_TO_VALUES[severity_name]
+                self.__severity_map[checker_name] = severity
 
             db_report = DBReport(
                 run_id, report.report_hash, file_path_to_id[report.file.path],
@@ -973,6 +980,7 @@ class MassStoreRun:
         self.__already_added_report_hashes = set()
         self.__new_report_hashes = dict()
         self.__all_report_checkers = set()
+        self.__severity_map = dict()
 
         all_reports = session.query(DBReport) \
             .filter(DBReport.run_id == run_id) \
