@@ -549,13 +549,15 @@ class Report:
         }
 
     def __eq__(self, other):
-        if isinstance(other, Report):
+        try:
             return self.file == other.file and \
                 self.line == other.line and \
                 self.column == other.column and \
                 self.message == other.message and \
                 self.checker_name == other.checker_name and \
                 self.report_hash == other.report_hash
+        except AttributeError:
+            return False
 
         raise NotImplementedError(
             f"Comparison Range object with '{type(other)}' is not supported")

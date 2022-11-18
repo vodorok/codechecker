@@ -8,6 +8,7 @@
 
 import base64
 import json
+from multiprocessing.managers import DictProxy
 import os
 import sqlalchemy
 import tempfile
@@ -18,6 +19,7 @@ import zlib
 from collections import defaultdict
 from datetime import datetime
 from hashlib import sha256
+from multiprocessing import  Manager, Process, Queue
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -224,7 +226,8 @@ class MassStoreRun:
         self.__wrong_src_code_comments: List[str] = []
         self.__already_added_report_hashes: Set[str] = set()
         self.__severity_map: Dict[str, int] = {}
-        self.__new_report_hashes: Dict[str, Tuple] = {}
+        #self.__new_report_hashes: Dict[str, Tuple] = {}
+        self.__new_report_hashes: DictProxy[str, Tuple]
         self.__all_report_checkers: Set[str] = set()
 
     @property
@@ -798,6 +801,7 @@ class MassStoreRun:
 
     def __process_report_file(
         self,
+        report_queue: Queue,
         report_file_path: str,
         session: DBSession,
         source_root: str,
@@ -805,16 +809,11 @@ class MassStoreRun:
         file_path_to_id: Dict[str, int],
         run_history_time: datetime,
         skip_handler: skiplist_handler.SkipListHandler,
-        hash_map_reports: Dict[str, List[Any]]
+        hash_map_reports: Dict[str, List[Any]],
     ) -> bool:
         """
         Process and save reports from the given report file to the database.
         """
-        reports = report_file.get_reports(report_file_path)
-
-        if not reports:
-            return True
-
         def get_review_status_from_source(report: Report) -> Dict[str, Any]:
             """
             Return the review status belonging to the given report and a
@@ -830,6 +829,8 @@ class MassStoreRun:
             - If the report doesn't have a default review status then an
               "unreviewed" review status and False returns.
             """
+            LOG.debug("Store Process started")
+
             # The original file path is needed here, not the trimmed, because
             # the source files are extracted as the original file path.
             source_file_name = os.path.realpath(os.path.join(
@@ -878,11 +879,17 @@ class MassStoreRun:
 
             return missing_ids_for_files
 
-        root_dir_path = os.path.dirname(report_file_path)
-        mip = self.__mips[root_dir_path]
-        analysis_info = self.__analysis_info.get(root_dir_path)
+        #root_dir_path = os.path.dirname(report_file_path)
+        mip = self.__mips[report_file_path]
+        analysis_info = self.__analysis_info.get(report_file_path)
 
-        for report in reports:
+        #for report in reports:
+        #report = report_queue.get()
+        #while None != report:
+        while report := report_queue.get():
+            c = report_queue.qsize()//50
+            LOG.info(f"Queue size {c*'I'}{(20-c)*'_'}")
+            #LOG.info(f"In processing {report.report_hash}")
             report.trim_path_prefixes(self.__trim_path_prefixes)
 
             missing_ids_for_files = get_missing_file_ids(report)
@@ -942,8 +949,41 @@ class MassStoreRun:
             self.__already_added_report_hashes.add(report_path_hash)
 
             LOG.debug("Storing report done. ID=%d", report_id)
+            #report = report_queue.get()
 
         return True
+
+    def __parse_plists(
+            self,
+            report_dir: str,
+            reports_queue: Queue
+        ):
+
+        # Processing analyzer result files.
+
+        processed_result_file_count = 0
+        for root_dir_path, _, report_file_paths in os.walk(report_dir):
+            LOG.debug("Get reports from '%s' directory", root_dir_path)
+
+            for f in report_file_paths:
+                if not report_file.is_supported(f):
+                    continue
+
+                LOG.debug("Parsing input file '%s'", f)
+
+                report_file_path = os.path.join(root_dir_path, f)
+                reports = report_file.get_reports(report_file_path)
+
+                for report in reports:
+                    #LOG.info(f"Adding report to queue {report.report_hash}")
+                    reports_queue.put(report)
+
+                processed_result_file_count += 1
+        reports_queue.put(None)
+        LOG.info("[%s] Processed %d analyzer result file(s).", self.__name,
+                 processed_result_file_count)
+
+
 
     def __store_reports(
         self,
@@ -978,7 +1018,7 @@ class MassStoreRun:
 
         # Reset internal data.
         self.__already_added_report_hashes = set()
-        self.__new_report_hashes = dict()
+        #self.__new_report_hashes = dict()
         self.__all_report_checkers = set()
         self.__severity_map = dict()
 
@@ -992,38 +1032,35 @@ class MassStoreRun:
 
         enabled_checkers: Set[str] = set()
         disabled_checkers: Set[str] = set()
+        mip = self.__mips[report_dir]
+        enabled_checkers.update(mip.enabled_checkers)
+        disabled_checkers.update(mip.disabled_checkers)
 
-        # Processing analyzer result files.
-        processed_result_file_count = 0
+        LOG.debug(self.__mips)
 
         for root_dir_path, _, report_file_paths in os.walk(report_dir):
             for f in report_file_paths:
                 if not report_file.is_supported(f):
                     continue
 
+        skip_handler = get_skip_handler(report_dir)
 
-        for root_dir_path, _, report_file_paths in os.walk(report_dir):
-            LOG.debug("Get reports from '%s' directory", root_dir_path)
+        manager = Manager()
+        self.__new_report_hashes = manager.dict()
 
-            skip_handler = get_skip_handler(root_dir_path)
+        report_queue=Queue(1000)
+        file_reader_process=Process(target=self.__parse_plists, args=(report_dir, report_queue, ))
+        store_process=Process(target=self.__process_report_file, args=(report_queue,
+            report_dir, session, source_root, run_id,
+            file_path_to_id, run_history_time,
+            skip_handler, report_to_report_id))
+        file_reader_process.start()
+        store_process.start()
 
-            mip = self.__mips[root_dir_path]
-            enabled_checkers.update(mip.enabled_checkers)
-            disabled_checkers.update(mip.disabled_checkers)
+        file_reader_process.join()
+        store_process.join()
 
-            for f in report_file_paths:
-                if not report_file.is_supported(f):
-                    continue
-
-                LOG.debug("Parsing input file '%s'", f)
-
-                report_file_path = os.path.join(root_dir_path, f)
-                self.__process_report_file(
-                    report_file_path, session, source_root, run_id,
-                    file_path_to_id, run_history_time,
-                    skip_handler, report_to_report_id)
-                processed_result_file_count += 1
-
+        LOG.debug(f"New Report Hashes {self.__new_report_hashes}")
         # Get all relevant review_statuses for the newly stored reports
         #all_review_statues = session.query(ReviewStatus.bug_hash, ReviewStatus.status, DBReport.id) \
         reports_to_rs_rules = session.query(ReviewStatus, DBReport.id) \
@@ -1060,9 +1097,6 @@ class MassStoreRun:
 
         # TODO Ask Tibi about reports already in DB.
 
-
-        LOG.info("[%s] Processed %d analyzer result file(s).", self.__name,
-                 processed_result_file_count)
 
         # If a checker was found in a plist file it can not be disabled so we
         # will add this to the enabled checkers list and remove this checker
