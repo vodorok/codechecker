@@ -102,9 +102,10 @@ module.exports = {
     const runName = "simple";
     const runsPage = browser.page.runs();
 
+    runsPage.pause(100).click("@name");
+
     runsPage
-      .click("@name")
-      .pause(100)
+      .assert.urlContains("reports")
       .assert.urlContains(`run=${runName}`)
       .assert.urlContains("review-status=Unreviewed")
       .assert.urlContains("review-status=Confirmed%20bug")
