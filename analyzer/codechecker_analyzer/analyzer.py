@@ -12,6 +12,9 @@ Prepare and start different analysis types
 
 from collections import defaultdict
 from multiprocessing.managers import SyncManager
+from pathlib import Path
+from pprint import pprint
+
 import os
 import shutil
 import signal
@@ -27,6 +30,9 @@ from .analyzers.config_handler import AnalyzerConfigHandler, CheckerState
 from .analyzers.clangsa.analyzer import ClangSA
 
 from .makefile import MakeFileCreator
+
+from codechecker_report_converter.report import report_file as rf
+from codechecker_report_converter.report.hash import get_report_path_hash
 
 LOG = get_logger('analyzer')
 
@@ -126,6 +132,37 @@ def __has_enabled_checker(ch: AnalyzerConfigHandler):
     """
     return any(state == CheckerState.enabled
                for _, (state, _) in ch.checks().items())
+
+
+def compact_report_folder(report_folder: Path):
+    alredy_existing_report = set()
+
+    for dir_path, file_paths in rf.analyzer_result_files([str(report_folder)]):
+        for file_path in file_paths:
+            # Check all reports in this plist file
+            reports = rf.get_reports(file_path)
+            # Do better here:
+            unique_reports = []
+            for report in reports:
+                report_path_hash = get_report_path_hash(report)
+                
+                if report_path_hash in alredy_existing_report:
+                    pass
+                else:
+                    alredy_existing_report.add(report_path_hash)
+                    unique_reports.append(report)
+                
+            if len(unique_reports) == len(reports):
+                print(file_path, "Already unique")
+            else:
+                print(file_path, "Recreated")
+                Path(file_path).unlink()
+                rf.create(file_path, list(unique_reports))
+
+
+
+
+
 
 
 def perform_analysis(args, skip_handlers, actions, metadata_tool,
@@ -339,5 +376,8 @@ def perform_analysis(args, skip_handlers, actions, metadata_tool,
 
     if ctu_collect and ctu_analyze:
         shutil.rmtree(ctu_dir, ignore_errors=True)
+
+    #LOG.info("Doing report folder compacting")
+    #compact_report_folder(args.output_path)
 
     manager.shutdown()

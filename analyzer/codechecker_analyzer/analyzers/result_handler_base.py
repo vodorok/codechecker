@@ -9,6 +9,9 @@
 Result handlers to manage the output of the static analyzers.
 """
 
+from collections import defaultdict
+from pathlib import Path
+from pprint import pprint
 import hashlib
 import os
 import shlex
@@ -20,6 +23,8 @@ from codechecker_analyzer import analyzer_context
 from codechecker_common.logger import get_logger
 from codechecker_common.skiplist_handler import SkipListHandlers
 
+from codechecker_report_converter.report import report_file as rf
+from codechecker_report_converter.report.hash import get_report_path_hash
 
 LOG = get_logger('analyzer')
 
@@ -186,7 +191,41 @@ class ResultHandler(metaclass=ABCMeta):
         Postprocess result if needed.
         Should be called after the analyses finished.
         """
-        pass
+        reports = rf.get_reports(self.analyzer_result_file)
+        reports_by_file = defaultdict(list)
+        unique_reports = set()
+        for report in reports:
+            report_path_hash = get_report_path_hash(report)
+            if report_path_hash in unique_reports:
+                continue
+            unique_reports.add(report_path_hash)
+            reports_by_file[report.file.id].append(report)
+
+        for file_path, reports in reports_by_file.items():
+            file_name = str(Path(file_path).name).replace(".", "_")
+            new_file_path = Path(Path(self.analyzer_result_file).parent, file_name).with_suffix(".plist")
+
+            if new_file_path.exists():
+                # Merge and uniqe the reports from this file.
+                existing_reports_in_file = rf.get_reports(str(new_file_path))
+                unique_reports_in_file = set()
+                for report in existing_reports_in_file:
+                    unique_reports_in_file.add(get_report_path_hash(report))
+
+                for report in reports:
+                    if get_report_path_hash(report) not in unique_reports_in_file:
+                        existing_reports_in_file.append(report)
+                        unique_reports_in_file.add(get_report_path_hash(report))
+
+                rf.create(str(new_file_path), existing_reports_in_file)
+
+            else:
+                LOG.info(f"Creating file {new_file_path}")
+                rf.create(str(new_file_path), reports)
+        
+        Path.unlink(Path(self.analyzer_result_file))
+            
+        LOG.info(f"Creating per file result file {[(k, len(v)) for k, v in reports_by_file.items()]}")
 
     def handle_results(self, client):
         """

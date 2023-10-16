@@ -58,3 +58,5 @@ class ClangSAResultHandler(ResultHandler):
             report_file.create(
                 self.analyzer_result_file, reports, self.checker_labels,
                 self.analyzer_info)
+
+            super().postprocess_result(skip_handlers)
