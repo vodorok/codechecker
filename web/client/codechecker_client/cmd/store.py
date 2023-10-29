@@ -370,8 +370,12 @@ def filter_source_files_with_comments(
     # being present in windows, so stuff like setting up
     # PYTHONPATH in parent CodeChecker before store is executed
     # are lost.
-    if sys.platform == "win32":
+    if sys.platform == "win32": #or sys.platform == "darwin":
         return get_source_file_with_comments(jobs)
+    elif sys.platform == "darwin":
+        import multiprocess
+        with multiprocess.Pool() as pool:
+            return get_source_file_with_comments(jobs, pool.map)
     else:
         with ProcessPoolExecutor() as executor:
             return get_source_file_with_comments(jobs, executor.map)
@@ -449,6 +453,13 @@ def assemble_zip(inputs, zip_file, client, checker_labels: CheckerLabels):
     if sys.platform == "win32":
         analyzer_result_file_reports = parse_analyzer_result_files(
             analyzer_result_file_paths, checker_labels)
+
+    elif sys.platform == "darwin":
+        import multiprocess
+        with multiprocess.Pool() as pool:
+            analyzer_result_file_reports = parse_analyzer_result_files(
+                 analyzer_result_file_paths, checker_labels, pool.map)
+            
     else:
         with ProcessPoolExecutor() as executor:
             analyzer_result_file_reports = parse_analyzer_result_files(

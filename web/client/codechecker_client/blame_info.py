@@ -118,7 +118,7 @@ def assemble_blame_info(
     # being present in windows, so stuff like setting up
     # PYTHONPATH in parent CodeChecker before store is executed
     # are lost.
-    if sys.platform == "win32":
+    if sys.platform == "win32" or sys.platform == "darwin":
         file_blame_info = __collect_blame_info_for_files(file_paths)
     else:
         with ProcessPoolExecutor() as executor:
