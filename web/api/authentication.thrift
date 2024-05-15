@@ -147,4 +147,8 @@ service codeCheckerAuthentication {
   bool removeToken(1: string token)
                    throws (1: codechecker_api_shared.RequestFailed requestError)
 
+  // Test endpoint, echos back input
+  string echoInput(1: string input)
+                   throws (1: codechecker_api_shared.RequestFailed requestError)
+
 }

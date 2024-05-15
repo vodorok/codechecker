@@ -67,6 +67,14 @@
             >
               Login
             </v-btn>
+            <v-btn
+              block
+              x-large
+              color="primary"
+              @click="echo_handler"
+            >
+              Echo Input
+            </v-btn>
           </v-card-actions>
         </v-card>
       </v-col>
@@ -77,6 +85,8 @@
 <script>
 import { mapGetters } from "vuex";
 import { LOGIN } from "@/store/actions.type";
+
+import { authService, handleThriftError } from "@cc-api";
 
 import Alerts from "@/components/Alerts";
 
@@ -139,6 +149,18 @@ export default {
           this.errorMsg = `Failed to log in! ${err.message}`;
           this.error = true;
         });
+    },
+
+    echo_handler() {
+      new Promise(resolve => {
+        authService.getClient().echoInput(this.username,
+          handleThriftError(ret => {
+            resolve(ret);
+          },));
+      }).then(ret => {
+        this.errorMsg = `Server returned: ${ret}`;
+        this.error = true;
+      });
     },
 
     /**

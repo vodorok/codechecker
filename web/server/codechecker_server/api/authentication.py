@@ -434,3 +434,13 @@ class ThriftAuthHandler:
                     str(t.last_access)))
 
             return result
+
+    @timeit
+    def echoInput(self, input):
+        """
+        Returns the input string.
+        """
+        import time
+        time.sleep(3)
+        return "Beep-Boop returning input: " + input
+
