@@ -108,6 +108,10 @@ class ThriftAuthHandler:
         return "https://github.com"
 
     @timeit
+    def createOauthLink(self):
+        return "Dummylink"
+
+    @timeit
     def getAcceptedAuthMethods(self):
         return ["Username:Password","oauth"]
 

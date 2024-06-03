@@ -85,7 +85,8 @@
 
 <script>
 import { mapGetters } from "vuex";
-import { LOGIN ,OAUTH } from "@/store/actions.type";
+import { LOGIN } from "@/store/actions.type";
+import { authService, handleThriftError } from "@cc-api";
 
 import Alerts from "@/components/Alerts";
 
@@ -150,19 +151,15 @@ export default {
         });
     },
     oauth() {
-      this.$store
-        .dispatch(OAUTH)
-        .then(link => {
-          this.success = true;
-          this.error = false;
-          this.$router.replace(link);
-
-          // const returnTo = this.$router.currentRoute.query["return_to"];
-          // this.$router.replace(returnTo || { name: "products" });
-        }).catch(err => {
-          this.errorMsg = `Failed to access link. ${err.message}`;
-          this.error = true;
-        });
+      new Promise(resolve => {
+        authService.getClient().createLink(
+          handleThriftError(ret => {
+            resolve(ret);
+          }));
+      }).then(ret => {
+        this.errorMsg = `Server returned: ${ret}`;
+        this.error = true;
+      });
     },
 
     /**
